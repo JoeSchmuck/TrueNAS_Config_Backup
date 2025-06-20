@@ -14,7 +14,7 @@ This scripts works on both CORE and SCALE.
 4. Edit the script, update the three values identified above.<br>
 5. Open a Shell window as `root` and run the command `./truenas_config_backup.sh` to launch the script.<br>
 6. You should have an email if all goes well.<br>
-7. Open the attachment and verify yo can locate the two files `freenas-v1.db` and `pwenc_secret`.
+7. Open the .tar file attachment and verify you can locate the two files `freenas-v1.db` and `pwenc_secret`.
 8. Create a CRON Job to run this script as frequently as you desire.  This depends on how often you change your configuration.<br>
 9. If you must use these files, extract them to your local computer so you can upload them using the TrueNAS GUI.<br>
 
