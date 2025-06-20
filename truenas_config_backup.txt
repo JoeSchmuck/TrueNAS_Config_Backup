@@ -1,0 +1,294 @@
+#!/bin/bash
+
+LANG="en_US.UTF-8"
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+## TrueNAS_Config_Backup
+#
+##### Version 1.0 (20 June 2025)
+#
+# What is this script?
+#
+# This is a small script to send yourself an email of your TrueNAS Configuration Files each time the script is run.
+# This scripts works on both CORE and SCALE.
+#
+## Instructions:
+#
+# 1. Download the file `truenas_config_backup.txt`
+# 2. Rename the file to `truenas_config_backup.sh`
+# 3. Place this file in any directory you want, I suggest your "scripts" directory if you created one.
+# 4. Edit the script, update the three values identified above.
+# 5. Open a Shell window as `root` and run the command `./truenas_config_backup.sh` to launch the script.
+# 6. You should have an email if all goes well.
+# 7. Open the .tar file attachment and verify you can locate the two files `freenas-v1.db` and `pwenc_secret`.
+# 8. Create a CRON Job to run this script as frequently as you desire.  This depends on how often you change your configuration.
+# 9. If you must use these files, extract them to your local computer so you can upload them using the TrueNAS GUI.
+#
+# Change the three variables below as desired.   
+#  * Email - YOU MUST DO THIS
+#
+# If you would like to also maintain a copy of the config file on the server:   
+#  * Set TrueNASConfigBackupSave from "no" to "yes".
+#  * Set TrueNASConfigBackupLocation to a complete path, ex. "/mnt/mypool/backup_scripts/" or "/mnt/config_backups/".
+#
+## Extra Info
+#
+# Run the script from CRON.  Below are possible options for user and the command line, the accounts must be setup correctly, `root` is the one that will work for certain.
+#  * User `root`   cd /mnt/mypool/scripts && ./config_backup.sh
+#  * User `truenas_admin`   cd /mnt/mypool/scripts && sudo ./config_backup.sh
+#  * User `truenas_admin`   sudo ./mnt/mypool/scripts/config_backup.sh
+#  * User `truenas_admin`   cd /mnt/mypool/scripts/ && sudo ./config_backup.sh
+#
+## Dependancies
+#
+# This script utilized the `sendemail.py` script by @oxyde (on GitHub) by downloading
+# the python script if it does not already exist in the running directory.
+#
+# If this is a TrueNAS CORE system, one line will be modified to allow the use of
+# the `midclt` command.  This change is not required if you are using TrueNAS SCALE.
+#
+# You must have `root` type privledges to access the two required configuration files.
+
+
+###### Email Address(s)
+Email="YourEmail@Address.com"	# Normal email address to send report.
+
+###### TrueNAS config backup settings
+TrueNASConfigBackupSave="no"		# Set to "no" to delete TrueNAS config backup after mail is sent; "yes" to keep it in directory below.
+TrueNASConfigBackupLocation="/tmp/"	# Directory in which to store the backup FreeNAS config files.  Leaving as "/tmp/", the files will not survive a reboot.
+                                    #  Examples: "/mnt/mypool/scripts/backup_config_files/" or "/mnt/truenas_config_files/".
+
+##########################
+##########################
+###                    ###
+###  STOP EDITING THE  ###
+###    SCRIPT HERE     ###
+###                    ###
+##########################
+##########################
+
+###### Auto-generated Parameters
+softver=$(uname -s)
+host=$(hostname -s)
+logfile_header="/tmp/config_report_header.tmp"
+TrueNAS_Version_Names="26.10:Icefish,26.04:Halfmoon,25.10:Goldeye,25.04:Fangtooth,24.10:Electric Eel,24.04:Dragonfish"
+
+if [[ $softver != "Linux" ]]; then
+  # shellcheck disable=SC2143
+  # shellcheck disable=SC2002
+  if [[ "$(cat /etc/version | grep "FreeNAS")" ]]; then
+    programver=" (FreeNAS $(cat /etc/version | cut -d " " -f1 | sed 's/FreeNAS-//'))"
+    programver3="$(cat /etc/version | cut -d " " -f1 | sed 's/FreeNAS-//')"
+  else
+    programver=" (TrueNAS Core $(cat /etc/version | cut -d " " -f1 | sed 's/TrueNAS-//'))"
+    programver3="$(cat /etc/version | cut -d " " -f1 | sed 's/TrueNAS-//')"
+  fi
+  # shellcheck disable=SC2002
+  truenas_ver=$(cat /etc/version | cut -d"-" -f2 | cut -d"." -f1)	# Provides a whole number like '13'
+else
+
+  IFS=',' read -ra ADDR <<< "$TrueNAS_Version_Names"
+	for i in "${ADDR[@]}"; do
+		Ver_number="$(echo "$i" | cut -d':' -f 1 | cut -c1-5)"
+		# shellcheck disable=SC2002
+		truenas_ver_first_four=$(cat /etc/version | cut -c1-5)
+		if [[ "$Ver_number" == "$truenas_ver_first_four" ]]; then
+			truenas_ver_name="$(echo "$i" | cut -d':' -f 2)"
+		fi
+	done
+
+  # shellcheck disable=SC2002
+  truenas_ver=$(cat /etc/version | cut -d"-" -f1)	# Provides the entire version number like '24.10.0.2'
+  programver=" (TrueNAS SCALE -  $truenas_ver - $truenas_ver_name)"
+  programver3="$(cat /etc/version)"
+
+fi
+
+if [[ $softver != "Linux" ]]; then
+	timestamp=$(date +%T)
+else
+# Linux gets second resolution as well
+	timestamp=$(date +"%T")
+fi
+
+
+##########################
+##########################
+###                    ###
+###  DEFINE FUNCTIONS  ###
+###                    ###
+##########################
+##########################
+
+
+########## TRUENAS CONFIGURATION BACKUP ##########
+# TrueNAS Configuration Backup (if enabled)
+
+config_backup () {
+	### Test config integrity
+	if ! [ "$(sqlite3 /data/freenas-v1.db "pragma integrity_check;")" == "ok" ]; then
+		# Config integrity check failed, set MIME content type to html and print warning
+		echo "Automatic backup of TrueNAS configuration has failed! The configuration file is corrupt!"
+		echo "You should correct this problem as soon as possible!"
+		exit 1
+	else
+		# shellcheck disable=SC2027
+		# shellcheck disable=SC2086
+		Config_Name="$(date "+"$host"_Config_"$programver3"_%Y-%m-%d.tar")"
+		(
+		cd "/data/" || exit;
+		tar -czf "/tmp/${Config_Name}" ./freenas-v1.db ./pwenc_secret #> /dev/null 2<&1
+		)
+
+		if [ "$TrueNASConfigBackupSave" == "yes" ]; then
+			# shellcheck disable=SC2001
+			TrueNASConfigBackupLocation="$(echo $TrueNASConfigBackupLocation | sed 's:/*$::')"
+			if [[ $TrueNASConfigBackupLocation != "/tmp" ]]; then
+				cp "/tmp/${Config_Name}" "${TrueNASConfigBackupLocation}/${Config_Name}"
+			fi
+			echo "Configuration Backup Files saved: ${TrueNASConfigBackupLocation}/${Config_Name}"
+		fi	
+	fi
+	}
+
+########## CREATE ATTACHMENT FILE ##########
+
+create_attachment_file () {
+
+	encoded_content=$(base64 --wrap=0 "$1")
+	# add header 'new' information
+	(
+	echo '['
+	echo ' {'
+	echo '  "headers": ['
+	echo '   {'
+	echo '    "name": "Content-Transfer-Encoding",'
+	echo '    "value": "base64"'
+	echo '   },'
+	echo '   {'
+	echo '    "name": "Content-Type",'
+	echo '    "value": "application/octet-stream",'
+	echo '    "params": {'
+	echo '     "name": "'"$2"'"'
+	echo '    }'
+	echo '   }'
+	echo '  ],'
+	echo '  "content": "'"$encoded_content"'"'
+	echo ' }'
+	echo ']'
+	) > /tmp/attachment.json
+	
+	}
+
+get_sendemail () {
+	# Fetch the Python based sendemail.py file.  THIS SHOULD ONLY RUN ONCE TO GET THE FILE ON THE SYSTEM.
+	# Big thanks goes out to @oxyde
+
+	if test -e "$SCRIPT_DIR/mr_sendemail.py"; then
+		return
+	else
+		echo "--- Grabbing Sendemail.py by @Oxyde"
+		if [[ "$(curl -is https://github.com | head -n 1)" ]]; then
+			# Go git the file
+			(
+				cd /tmp || exit 3
+				curl -LJOs https://raw.githubusercontent.com/oxyde1989/standalone-tn-send-email/refs/heads/main/multireport_sendemail.py
+			)
+
+			cp /tmp/multireport_sendemail.py "$SCRIPT_DIR/mr_sendemail.py"
+			rm /tmp/multireport_sendemail.py
+			
+			# Edit sendemail.py script to change absolute path which is SCALE unique "/usr/bin/midclt" to "midclt" to make it compatible with CORE.
+			if [[ $softver != "Linux" ]]; then
+				sed 's#/usr/bin/midclt#/usr/local/bin/midclt#' "$SCRIPT_DIR/mr_sendemail.py" > /tmp/temp_sed_file.txt && mv /tmp/temp_sed_file.txt "$SCRIPT_DIR/mr_sendemail.py"
+				echo "----- Adjusting Script for use with CORE complete"
+			fi
+		else
+			echo "github not available, try again later"
+			exit 1
+		fi
+	fi
+
+	}
+
+create_Email () {
+
+	subject="${host} - TrueNAS Configuration Backup - $(date "+%d-%b-%Y")"
+	(
+		echo "$programver<br>Report Run $(date "+%d-%b-%Y %A") @ $timestamp<br><br>"
+	) > ${logfile_header}
+
+	tar_attachments
+
+	echo "/tmp/${Config_Name}" > /tmp/attachment_files2.txt
+	sleep .1
+
+	# shellcheck disable=SC2162
+	while read line; do
+		attachment+=("$line")
+	done < /tmp/attachment_files2.txt
+	
+	# Sendemail Courtesy of @oxyde
+		python3 "$SCRIPT_DIR/mr_sendemail.py" \
+		--subject "$subject" \
+		--to_address "$Email" \
+		--mail_body_html "$logfile_header" \
+		--attachment_files "${attachment[@]}" > /tmp/sendemail_error.txt
+
+	# Check Exit Code
+	# shellcheck disable=SC2181
+	if [[ $? -ne 0 ]]; then
+		echo "Sendemail had a problem.  Check the file log at $SCRIPT_DIR/sendemail_log"
+		cat /tmp/sendemail_error.txt
+		exit $?
+	else
+		echo "--- Email Sent"
+	fi
+
+	}
+
+tar_attachments () {
+
+	tar -rf "/tmp/${Config_Name}" "/tmp/${Config_Name}" > /dev/null 2<&1
+	echo "create_attachment_file /tmp/$Config_Name $Config_Name" > /tmp/attachment_files.txt
+
+	}
+
+attach_files () {
+
+	echo "create_attachment_file /tmp/$Config_Name $Config_Name" >> /tmp/attachment_files.txt
+	
+	}
+	
+cleanup () {
+
+	if test -e "/tmp/${Config_Name}"; then rm "/tmp/${Config_Name}"; fi
+	if test -e "/tmp/attachment_files.txt"; then rm /tmp/attachment_files.txt; fi
+	if test -e "/tmp/attachment_files2.txt"; then rm /tmp/attachment_files2.txt; fi
+	if test -e "/tmp/config_report_header.tmp"; then rm /tmp/config_report_header.tmp; fi
+	if test -e "/tmp/sendemail_error.txt"; then rm /tmp/sendemail_error.txt; fi  
+
+	}
+
+
+### DEFINE FUNCTIONS END ###
+
+#######################
+#######################
+###                 ###
+###  PROGRAM START  ###
+###                 ###
+#######################
+#######################
+
+echo " "
+echo "TrueNAS Configuration Backup"
+echo "--- Collecting Configuration data for $programver"
+get_sendemail	# Go check if mr_sendemail.py exists in script directory, if not, grab it from GitHub
+config_backup	# Make a back of TrueNAS configuration files and .tar them.
+create_Email	# Generate the Email Header and Body.
+cleanup			# Cleanup left over files.
+echo "--- Exiting"
+echo " "
+echo " "
