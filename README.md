@@ -1,5 +1,5 @@
 # TrueNAS_Config_Backup
-##### Version 1.0 (20 June 2025)
+##### Version 1.2 (30 July 2025)
 ---
 What is this script?<br>
 
