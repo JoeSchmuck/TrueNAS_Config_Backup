@@ -6,7 +6,12 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 ## TrueNAS_Config_Backup
 #
-##### Version 1.0 (20 June 2025)
+##### Version 1.2 (30 July 2025)
+# 
+#  - Updated use of sendemail.py script form @oxyde.
+#
+
+# Version 1.0 (20 June 2025)
 #
 # What is this script?
 #
@@ -40,7 +45,7 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 #  * User `truenas_admin`   sudo ./mnt/mypool/scripts/config_backup.sh
 #  * User `truenas_admin`   cd /mnt/mypool/scripts/ && sudo ./config_backup.sh
 #
-## Dependancies
+## Dependencies
 #
 # This script utilized the `sendemail.py` script by @oxyde (on GitHub) by downloading
 # the python script if it does not already exist in the running directory.
@@ -48,7 +53,12 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 # If this is a TrueNAS CORE system, one line will be modified to allow the use of
 # the `midclt` command.  This change is not required if you are using TrueNAS SCALE.
 #
-# You must have `root` type privledges to access the two required configuration files.
+# You must have `root` type privileges to access the two required configuration files.
+
+# Version 1.01
+#
+# - Updated tar file to not have the two files so deeply embedded.
+
 
 
 ###### Email Address(s)
@@ -81,7 +91,7 @@ if [[ $softver != "Linux" ]]; then
     programver=" (FreeNAS $(cat /etc/version | cut -d " " -f1 | sed 's/FreeNAS-//'))"
     programver3="$(cat /etc/version | cut -d " " -f1 | sed 's/FreeNAS-//')"
   else
-    programver=" (TrueNAS Core $(cat /etc/version | cut -d " " -f1 | sed 's/TrueNAS-//'))"
+    programver="TrueNAS Core $(cat /etc/version | cut -d " " -f1 | sed 's/TrueNAS-//')"
     programver3="$(cat /etc/version | cut -d " " -f1 | sed 's/TrueNAS-//')"
   fi
   # shellcheck disable=SC2002
@@ -138,7 +148,8 @@ config_backup () {
 		Config_Name="$(date "+"$host"_Config_"$programver3"_%Y-%m-%d.tar")"
 		(
 		cd "/data/" || exit;
-		tar -czf "/tmp/${Config_Name}" ./freenas-v1.db ./pwenc_secret #> /dev/null 2<&1
+		if test -e "/tmp/${Config_Name}.tar"; then rm /tmp/"${Config_Name}".tar; fi
+		tar -czf /tmp/"${Config_Name}" --directory=./ freenas-v1.db pwenc_secret
 		)
 
 		if [ "$TrueNASConfigBackupSave" == "yes" ]; then
@@ -198,12 +209,6 @@ get_sendemail () {
 
 			cp /tmp/multireport_sendemail.py "$SCRIPT_DIR/mr_sendemail.py"
 			rm /tmp/multireport_sendemail.py
-			
-			# Edit sendemail.py script to change absolute path which is SCALE unique "/usr/bin/midclt" to "midclt" to make it compatible with CORE.
-			if [[ $softver != "Linux" ]]; then
-				sed 's#/usr/bin/midclt#/usr/local/bin/midclt#' "$SCRIPT_DIR/mr_sendemail.py" > /tmp/temp_sed_file.txt && mv /tmp/temp_sed_file.txt "$SCRIPT_DIR/mr_sendemail.py"
-				echo "----- Adjusting Script for use with CORE complete"
-			fi
 		else
 			echo "github not available, try again later"
 			exit 1
@@ -216,7 +221,7 @@ create_Email () {
 
 	subject="${host} - TrueNAS Configuration Backup - $(date "+%d-%b-%Y")"
 	(
-		echo "$programver<br>Report Run $(date "+%d-%b-%Y %A") @ $timestamp<br><br>"
+		echo "Attached is a .tar file which contains your TrueNAS configuration files for:<br>host is' ${host}'<br>$programver<br>Report Run $(date "+%d-%b-%Y %A") @ $timestamp<br><br>"
 	) > ${logfile_header}
 
 	tar_attachments
@@ -228,7 +233,7 @@ create_Email () {
 	while read line; do
 		attachment+=("$line")
 	done < /tmp/attachment_files2.txt
-	
+	export PYTHONPATH=/usr/local/bin/midclt		# Add midclt to path
 	# Sendemail Courtesy of @oxyde
 		python3 "$SCRIPT_DIR/mr_sendemail.py" \
 		--subject "$subject" \
